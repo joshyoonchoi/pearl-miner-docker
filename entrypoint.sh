@@ -47,6 +47,7 @@ pearld \
     --miningaddr="$PEARL_WALLET_ADDRESS" \
     --listen=:44108 \
     --rpclisten=:44107 \
+    --notls \
     &
 PEARLD_PID=$!
 
