@@ -36,8 +36,8 @@ echo "📦 Starting Pearl node (pearld)..."
 mkdir -p /app/chain-data
 
 # Generate random RPC credentials for internal use
-RPC_USER="miner_$(head -c 8 /dev/urandom | xxd -p)"
-RPC_PASS="$(head -c 16 /dev/urandom | xxd -p)"
+RPC_USER="miner_$(cat /proc/sys/kernel/random/uuid | tr -d '-' | head -c 16)"
+RPC_PASS="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
 
 # Start pearld
 pearld \
