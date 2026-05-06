@@ -100,8 +100,7 @@ COPY entrypoint.sh /app/entrypoint.sh
 COPY pearl_worker.py /app/pearl_worker.py
 RUN chmod +x /app/entrypoint.sh
 
-# Install requests for the mining worker
-RUN /usr/local/venv/bin/pip install requests
+# Note: 'requests' is already installed as a vLLM dependency
 
 # Environment
 ENV PATH="/usr/local/venv/bin:${PATH}" \
