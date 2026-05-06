@@ -95,9 +95,13 @@ COPY --from=builder /usr/local/venv /usr/local/venv
 # Copy Go binaries (pearld, oyster, prlctl)
 COPY --from=go-bins /go-bins/ /usr/local/bin/
 
-# Copy entrypoint
+# Copy entrypoint and mining worker
 COPY entrypoint.sh /app/entrypoint.sh
+COPY pearl_worker.py /app/pearl_worker.py
 RUN chmod +x /app/entrypoint.sh
+
+# Install requests for the mining worker
+RUN /usr/local/venv/bin/pip install requests
 
 # Environment
 ENV PATH="/usr/local/venv/bin:${PATH}" \

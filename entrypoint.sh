@@ -101,7 +101,7 @@ for i in $(seq 1 30); do
 done
 
 # ============================================================
-# Step 3: Auto-detect GPUs and start vLLM
+# Step 3: Auto-detect GPUs and configure parallelism
 # ============================================================
 if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
     GPU_COUNT=$(nvidia-smi -L 2>/dev/null | wc -l)
@@ -110,23 +110,83 @@ if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
         export CUDA_VISIBLE_DEVICES
         echo "🎮 Auto-detected $GPU_COUNT GPUs: CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
     fi
+else
+    GPU_COUNT=$(echo "$CUDA_VISIBLE_DEVICES" | tr ',' '\n' | wc -l)
 fi
 
-echo "🚀 Starting vLLM inference server (this mines PRL!)..."
+# Set data parallelism based on GPU count
+DP_SIZE="${PEARL_DP_SIZE:-$GPU_COUNT}"
+
+# Critical: disable deep gemm (conflicts with Pearl's NoisyGEMM)
+export VLLM_USE_DEEP_GEMM=0
+
+echo "🚀 Starting vLLM inference server..."
 echo "   Model: pearl-ai/Llama-3.3-70B-Instruct-pearl"
+echo "   Data Parallel Size: $DP_SIZE"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Mining will begin once the chain is synced."
+echo "  Mining will begin once chain is synced + vLLM ready."
 echo "  First sync takes ~2 hours from genesis."
 echo "  Monitor: http://localhost:8339/metrics"
 echo "  Check your stats: https://lordofpearls.xyz"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Start vLLM (this is the main process — keeps container alive)
-exec vllm serve pearl-ai/Llama-3.3-70B-Instruct-pearl \
+# Start vLLM in background (not exec — we need to start the worker loop too)
+vllm serve pearl-ai/Llama-3.3-70B-Instruct-pearl \
     --host 0.0.0.0 \
     --port 8000 \
     --max-model-len "${PEARL_MAX_MODEL_LEN:-8192}" \
     --gpu-memory-utilization "${PEARL_GPU_UTIL:-0.9}" \
-    --enforce-eager
+    --enforce-eager \
+    --data-parallel-size "$DP_SIZE" \
+    --no-enable-prefix-caching \
+    --no-enable-chunked-prefill \
+    &
+VLLM_PID=$!
+
+# ============================================================
+# Step 4: Wait for vLLM to be ready, then start request worker
+# ============================================================
+echo "⏳ Waiting for vLLM to load model and become ready..."
+for i in $(seq 1 600); do
+    if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+        echo "✅ vLLM is ready! Starting mining worker..."
+        break
+    fi
+    if [ $i -eq 600 ]; then
+        echo "❌ vLLM failed to start after 10 minutes"
+        exit 1
+    fi
+    # Print progress every 30s
+    if [ $((i % 30)) -eq 0 ]; then
+        echo "   Still loading model... (${i}s elapsed)"
+    fi
+    sleep 1
+done
+
+# Start the mining request worker
+# Mining ONLY happens when inference requests are being processed!
+# The NoisyGEMM kernel finds blocks as a by-product of matrix multiplication
+echo "⛏️  Starting mining request worker (${PEARL_WORKERS:-32} threads)..."
+python3 /app/pearl_worker.py &
+WORKER_PID=$!
+
+# ============================================================
+# Step 5: Watchdog — restart worker if it dies
+# ============================================================
+echo "🔄 Starting watchdog..."
+while true; do
+    # Check vLLM
+    if ! kill -0 $VLLM_PID 2>/dev/null; then
+        echo "❌ vLLM died! Exiting container."
+        exit 1
+    fi
+    # Check worker
+    if ! kill -0 $WORKER_PID 2>/dev/null; then
+        echo "⚠️  Worker died, restarting..."
+        python3 /app/pearl_worker.py &
+        WORKER_PID=$!
+    fi
+    sleep 30
+done

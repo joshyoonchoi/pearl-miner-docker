@@ -46,6 +46,8 @@ docker run --rm --gpus all \
 | `HF_TOKEN` | ✅ | HuggingFace token for model download |
 | `PEARL_MAX_MODEL_LEN` | ❌ | Max context length (default: 8192) |
 | `PEARL_GPU_UTIL` | ❌ | GPU memory utilization (default: 0.9) |
+| `PEARL_DP_SIZE` | ❌ | Data parallel size (default: auto-detected GPU count) |
+| `PEARL_WORKERS` | ❌ | Number of request worker threads (default: 32) |
 | `PEARLD_CONNECT` | ❌ | Peer address to speed up initial sync |
 
 ## Hardware Requirements
