@@ -1,0 +1,13 @@
+# chain data
+chain-data/
+*.dat
+
+# caches
+__pycache__/
+.cache/
+
+# env files with secrets
+.env
+
+# OS
+.DS_Store

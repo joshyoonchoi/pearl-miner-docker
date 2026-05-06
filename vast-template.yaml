@@ -1,0 +1,26 @@
+# Vast.ai template configuration
+# Import this as a custom template on Vast.ai
+
+# Image
+image: ghcr.io/terrapin88/pearl-miner-docker:latest
+
+# Required environment variables (user must fill in)
+env:
+  - PEARL_WALLET_ADDRESS=prl1_YOUR_ADDRESS_HERE
+  - HF_TOKEN=hf_YOUR_TOKEN_HERE
+
+# Optional tuning
+# - PEARL_MAX_MODEL_LEN=8192
+# - PEARL_GPU_UTIL=0.9
+
+# Ports to expose
+ports:
+  - 8000  # vLLM API
+  - 8339  # Gateway metrics
+
+# Minimum requirements
+disk_space: 250  # GB
+ram: 64          # GB
+
+# GPU filter: H100 or H200 only (sm90)
+# On Vast.ai, filter for "H100 SXM" or "H200 SXM" manually
