@@ -164,6 +164,22 @@ DP_SIZE="${PEARL_DP_SIZE:-$GPU_COUNT}"
 # Critical: disable deep gemm (conflicts with Pearl's NoisyGEMM)
 export VLLM_USE_DEEP_GEMM=0
 
+# Auto-detect VRAM and adjust max_model_len for H100 (80GB) vs H200 (141GB)
+if [ -z "$PEARL_MAX_MODEL_LEN" ]; then
+    VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    if [ -n "$VRAM_MB" ] && [ "$VRAM_MB" -lt 100000 ]; then
+        # H100 80GB — tight fit, use shorter context + higher memory util
+        PEARL_MAX_MODEL_LEN=4096
+        PEARL_GPU_UTIL="${PEARL_GPU_UTIL:-0.95}"
+        echo "🔧 H100 detected (${VRAM_MB}MB) — using max_model_len=4096, gpu_util=0.95"
+    else
+        # H200 141GB — plenty of room
+        PEARL_MAX_MODEL_LEN=8192
+        PEARL_GPU_UTIL="${PEARL_GPU_UTIL:-0.9}"
+        echo "🔧 H200 detected (${VRAM_MB}MB) — using max_model_len=8192, gpu_util=0.9"
+    fi
+fi
+
 echo "🚀 Starting vLLM inference server..."
 echo "   Model: pearl-ai/Llama-3.3-70B-Instruct-pearl"
 echo "   Data Parallel Size: $DP_SIZE"
@@ -180,7 +196,7 @@ echo ""
 vllm serve pearl-ai/Llama-3.3-70B-Instruct-pearl \
     --host 0.0.0.0 \
     --port 8000 \
-    --max-model-len "${PEARL_MAX_MODEL_LEN:-8192}" \
+    --max-model-len "$PEARL_MAX_MODEL_LEN" \
     --gpu-memory-utilization "${PEARL_GPU_UTIL:-0.9}" \
     --enforce-eager \
     --data-parallel-size "$DP_SIZE" \
