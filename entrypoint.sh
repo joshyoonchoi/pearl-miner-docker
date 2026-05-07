@@ -236,7 +236,7 @@ python3 /app/pearl_worker.py &
 WORKER_PID=$!
 
 # ============================================================
-# Step 5: Watchdog — restart worker if it dies
+# Step 5: Watchdog — restart ALL components if they die
 # ============================================================
 echo "🔄 Starting watchdog..."
 while true; do
@@ -244,6 +244,14 @@ while true; do
     if ! kill -0 $VLLM_PID 2>/dev/null; then
         echo "❌ vLLM died! Exiting container."
         exit 1
+    fi
+    # Check gateway (CRITICAL — without it, mining proofs go nowhere)
+    if ! kill -0 $GATEWAY_PID 2>/dev/null; then
+        echo "⚠️  Gateway died! Restarting..."
+        pearl-gateway start &
+        GATEWAY_PID=$!
+        sleep 5
+        echo "✅ Gateway restarted (PID=$GATEWAY_PID)"
     fi
     # Check worker
     if ! kill -0 $WORKER_PID 2>/dev/null; then
