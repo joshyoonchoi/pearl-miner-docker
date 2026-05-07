@@ -73,7 +73,50 @@ BLOCK_COUNT=$(curl -s --user "$RPC_USER:$RPC_PASS" \
     --data-binary '{"jsonrpc":"1.0","id":"sync","method":"getblockcount","params":[]}' \
     -H 'content-type: text/plain;' \
     http://localhost:44107/ | jq -r '.result // "unknown"')
-echo "📊 Current block height: $BLOCK_COUNT (chain will sync in background)"
+echo "📊 Current block height: $BLOCK_COUNT"
+
+# ============================================================
+# Step 1b: Wait for chain to fully sync before proceeding
+# The vllm_miner plugin REQUIRES a valid block template on startup.
+# If the gateway returns "mining_paused: no block template available",
+# vLLM will fatally crash. We must wait for full sync first.
+# ============================================================
+echo "⏳ Waiting for chain to fully sync (this may take 10-30 min from genesis)..."
+SYNC_TIMEOUT=3600  # 1 hour max
+SYNC_ELAPSED=0
+while [ $SYNC_ELAPSED -lt $SYNC_TIMEOUT ]; do
+    # Check if node is still downloading blocks
+    SYNC_CHECK=$(curl -s --user "$RPC_USER:$RPC_PASS" \
+        --data-binary '{"jsonrpc":"1.0","id":"sync","method":"getblocktemplate","params":[]}' \
+        -H 'content-type: text/plain;' \
+        http://localhost:44107/ 2>/dev/null)
+    
+    # If we get error code -10 ("downloading blocks"), keep waiting
+    ERROR_CODE=$(echo "$SYNC_CHECK" | jq -r '.error.code // 0')
+    if [ "$ERROR_CODE" != "-10" ]; then
+        CURRENT_HEIGHT=$(curl -s --user "$RPC_USER:$RPC_PASS" \
+            --data-binary '{"jsonrpc":"1.0","id":"h","method":"getblockcount","params":[]}' \
+            -H 'content-type: text/plain;' \
+            http://localhost:44107/ | jq -r '.result // "?"')
+        echo "✅ Chain fully synced at height $CURRENT_HEIGHT!"
+        break
+    fi
+    
+    if [ $((SYNC_ELAPSED % 30)) -eq 0 ]; then
+        CURRENT_HEIGHT=$(curl -s --user "$RPC_USER:$RPC_PASS" \
+            --data-binary '{"jsonrpc":"1.0","id":"h","method":"getblockcount","params":[]}' \
+            -H 'content-type: text/plain;' \
+            http://localhost:44107/ | jq -r '.result // "?"')
+        echo "   Syncing... height=$CURRENT_HEIGHT (${SYNC_ELAPSED}s elapsed)"
+    fi
+    sleep 5
+    SYNC_ELAPSED=$((SYNC_ELAPSED + 5))
+done
+
+if [ $SYNC_ELAPSED -ge $SYNC_TIMEOUT ]; then
+    echo "❌ Chain sync timed out after ${SYNC_TIMEOUT}s"
+    exit 1
+fi
 
 # ============================================================
 # Step 2: Start Pearl Gateway (the mining bridge)
