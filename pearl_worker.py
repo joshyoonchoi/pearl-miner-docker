@@ -21,9 +21,12 @@ import requests as req
 VLLM_URL = "http://localhost:8000/v1/chat/completions"
 MODEL = "pearl-ai/Llama-3.3-70B-Instruct-pearl"
 NUM_WORKERS = int(os.environ.get("PEARL_WORKERS", "32"))
-MAX_TOKENS = 3  # Keep responses short — we just need the matmul work
+MAX_TOKENS = int(os.environ.get("PEARL_MAX_TOKENS", "1"))  # Minimize decode time — mining only happens during prefill
 REQUEST_TIMEOUT = 120
-WORD_LIST_LENGTH = 120
+# CRITICAL: Prompt must be 1024+ tokens to trigger NoisyGEMM (min_m=1024).
+# With ~1.75 tokens per random word, 700 words ≈ 1200 tokens.
+# Shorter prompts = vanilla GEMM = NO MINING.
+WORD_LIST_LENGTH = int(os.environ.get("PEARL_WORD_LIST", "700"))
 
 CONSONANTS = "bcdfghjklmnpqrstvwxyz"
 VOWELS = "aeiou"
