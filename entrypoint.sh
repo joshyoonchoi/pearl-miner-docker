@@ -171,14 +171,19 @@ if [ -z "$PEARL_MAX_MODEL_LEN" ]; then
         # H100 80GB — tight fit, use shorter context + higher memory util
         PEARL_MAX_MODEL_LEN=4096
         PEARL_GPU_UTIL="${PEARL_GPU_UTIL:-0.95}"
-        echo "🔧 H100 detected (${VRAM_MB}MB) — using max_model_len=4096, gpu_util=0.95"
+        # H100 context is 4096 — word_list=1400 (~2600 tokens) would overflow!
+        PEARL_WORD_LIST="${PEARL_WORD_LIST:-700}"
+        echo "🔧 H100 detected (${VRAM_MB}MB) — using max_model_len=4096, gpu_util=0.95, word_list=${PEARL_WORD_LIST}"
     else
         # H200 141GB — plenty of room
         PEARL_MAX_MODEL_LEN=8192
         PEARL_GPU_UTIL="${PEARL_GPU_UTIL:-0.9}"
-        echo "🔧 H200 detected (${VRAM_MB}MB) — using max_model_len=8192, gpu_util=0.9"
+        PEARL_WORD_LIST="${PEARL_WORD_LIST:-1400}"
+        echo "🔧 H200 detected (${VRAM_MB}MB) — using max_model_len=8192, gpu_util=0.9, word_list=${PEARL_WORD_LIST}"
     fi
 fi
+
+export PEARL_WORD_LIST
 
 echo "🚀 Starting vLLM inference server..."
 echo "   Model: pearl-ai/Llama-3.3-70B-Instruct-pearl"
@@ -228,7 +233,12 @@ done
 # Start the mining request worker
 # Mining ONLY happens when inference requests are being processed!
 # The NoisyGEMM kernel finds blocks as a by-product of matrix multiplication
-echo "⛏️  Starting mining request worker (${PEARL_WORKERS:-32} threads)..."
+# Auto-scale workers: 32 per GPU to ensure each DP engine is saturated
+if [ -z "$PEARL_WORKERS" ]; then
+    PEARL_WORKERS=$((32 * GPU_COUNT))
+fi
+export PEARL_WORKERS
+echo "⛏️  Starting mining request worker ($PEARL_WORKERS threads for $GPU_COUNT GPU(s))..."
 python3 /app/pearl_worker.py &
 WORKER_PID=$!
 
