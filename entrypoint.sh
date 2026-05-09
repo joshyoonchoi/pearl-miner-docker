@@ -201,7 +201,7 @@ vllm serve pearl-ai/Llama-3.3-70B-Instruct-pearl \
     --enforce-eager \
     --data-parallel-size "$DP_SIZE" \
     --no-enable-prefix-caching \
-    --no-enable-chunked-prefill \
+    --max-num-seqs "${PEARL_MAX_SEQS:-64}" \
     &
 VLLM_PID=$!
 
