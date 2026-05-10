@@ -145,6 +145,13 @@ for i in $(seq 1 30); do
 done
 
 # ============================================================
+# Step 2b: Start read-only local observer
+# ============================================================
+echo "📡 Starting Pearl Observer..."
+python3 /app/miner_observer.py &
+OBSERVER_PID=$!
+
+# ============================================================
 # Step 3: Auto-detect GPUs and configure parallelism
 # ============================================================
 if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
@@ -193,6 +200,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "  Mining will begin once chain is synced + vLLM ready."
 echo "  First sync takes ~2 hours from genesis."
 echo "  Monitor: http://localhost:8339/metrics"
+echo "  Observer: http://localhost:${PEARL_OBSERVER_PORT:-8340}/dashboard.html"
 echo "  Check your stats: https://lordofpearls.xyz"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
@@ -265,6 +273,12 @@ while true; do
         echo "⚠️  Worker died, restarting..."
         python3 /app/pearl_worker.py &
         WORKER_PID=$!
+    fi
+    # Check observer (read-only; useful for fleet health/debugging)
+    if ! kill -0 $OBSERVER_PID 2>/dev/null; then
+        echo "⚠️  Observer died, restarting..."
+        python3 /app/miner_observer.py &
+        OBSERVER_PID=$!
     fi
     sleep 30
 done

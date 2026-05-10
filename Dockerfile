@@ -98,6 +98,7 @@ COPY --from=go-bins /go-bins/ /usr/local/bin/
 # Copy entrypoint and mining worker
 COPY entrypoint.sh /app/entrypoint.sh
 COPY pearl_worker.py /app/pearl_worker.py
+COPY miner_observer.py /app/miner_observer.py
 RUN chmod +x /app/entrypoint.sh
 
 # Note: 'requests' is already installed as a vLLM dependency
@@ -106,8 +107,8 @@ RUN chmod +x /app/entrypoint.sh
 ENV PATH="/usr/local/venv/bin:${PATH}" \
     LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/venv/lib/python3.12/site-packages/torch/lib:${LD_LIBRARY_PATH:-}
 
-# Ports: vLLM API, Pearl P2P, Gateway metrics
-EXPOSE 8000 8337 8339
+# Ports: vLLM API, Pearl P2P, Gateway metrics, observer dashboard
+EXPOSE 8000 8337 8339 8340 44108
 
 # Volumes for persistent data
 VOLUME ["/app/chain-data", "/root/.cache/huggingface"]

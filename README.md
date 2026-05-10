@@ -29,7 +29,7 @@ Same concept — use the image as a custom Docker template with the env vars abo
 
 ```bash
 docker run --rm --gpus all \
-  -p 8000:8000 -p 8337:8337 -p 8339:8339 \
+  -p 8000:8000 -p 8337:8337 -p 8339:8339 -p 8340:8340 -p 44108:44108 \
   -e PEARL_WALLET_ADDRESS=prl1youraddress \
   -e HF_TOKEN=hf_yourtoken \
   -v pearl-chain-data:/app/chain-data \
@@ -49,6 +49,7 @@ docker run --rm --gpus all \
 | `PEARL_DP_SIZE` | ❌ | Data parallel size (default: auto-detected GPU count) |
 | `PEARL_WORKERS` | ❌ | Number of request worker threads (default: 32) |
 | `PEARLD_CONNECT` | ❌ | Peer address to speed up initial sync |
+| `PEARL_OBSERVER_PORT` | ❌ | Read-only local dashboard/API port (default: 8340) |
 
 ## Hardware Requirements
 
@@ -62,7 +63,15 @@ docker run --rm --gpus all \
 
 - Gateway metrics: `http://localhost:8339/metrics`
 - vLLM API: `http://localhost:8000/health`
+- Read-only miner dashboard: `http://localhost:8340/dashboard.html`
+- Read-only miner JSON status: `http://localhost:8340/api/status`
+- Pearl p2p listener: `tcp://localhost:44108`
 - Check your mining stats: [lordofpearls.xyz](https://lordofpearls.xyz)
+
+The observer is intentionally read-only. It does not submit blocks, restart
+mining components, or expose `HF_TOKEN`/RPC credentials. It reports process
+health, GPU usage, vLLM counters, Pearl node template availability, gateway
+mining-related metrics, and wallet outcomes from the public explorer.
 
 ## Economics (as of May 2026)
 
