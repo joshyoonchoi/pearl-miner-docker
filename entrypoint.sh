@@ -45,6 +45,15 @@ start_logged() {
     printf -v "$pid_var" '%s' "$!"
 }
 
+log_line_count() {
+    local log_path="$1"
+    if [ -f "$log_path" ]; then
+        wc -l < "$log_path" | tr -d ' '
+    else
+        echo 0
+    fi
+}
+
 # Generate random RPC credentials for internal use
 RPC_USER="miner_$(cat /proc/sys/kernel/random/uuid | tr -d '-' | head -c 16)"
 RPC_PASS="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
@@ -136,6 +145,8 @@ export PEARLD_RPC_USER="$RPC_USER"
 export PEARLD_RPC_PASSWORD="$RPC_PASS"
 export PEARLD_MINING_ADDRESS="$PEARL_WALLET_ADDRESS"
 
+GATEWAY_LOG_PATH="$LOG_DIR/pearl-gateway.log"
+GATEWAY_TEMPLATE_LOG_START=$(log_line_count "$GATEWAY_LOG_PATH")
 start_logged pearl-gateway GATEWAY_PID pearl-gateway start
 
 # Wait for gateway metrics endpoint
@@ -157,9 +168,15 @@ done
 # the engine with "mining_paused: no block template available".
 echo "⏳ Waiting for Pearl Gateway block template..."
 for i in $(seq 1 600); do
-    if grep -q "Template refreshed successfully" "$LOG_DIR/pearl-gateway.log" 2>/dev/null; then
+    if [ -f "$GATEWAY_LOG_PATH" ] && \
+        tail -n +"$((GATEWAY_TEMPLATE_LOG_START + 1))" "$GATEWAY_LOG_PATH" | \
+        grep -q "Template refreshed successfully"; then
         echo "✅ Pearl Gateway has a block template"
         break
+    fi
+    if ! kill -0 "$GATEWAY_PID" 2>/dev/null; then
+        echo "❌ Pearl Gateway exited before refreshing a block template"
+        exit 1
     fi
     if [ $i -eq 600 ]; then
         echo "❌ Pearl Gateway did not refresh a block template after 10 minutes"
