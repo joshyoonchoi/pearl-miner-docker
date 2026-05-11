@@ -156,9 +156,22 @@ def run_json(cmd: List[str]) -> Dict[str, Any]:
     }
 
 
+def redact_process_line(line: str) -> str:
+    secret_prefixes = ("--rpcpass=", "--password=", "--token=", "--api-key=", "--apikey=")
+    parts = []
+    for part in line.split():
+        lowered = part.lower()
+        if any(lowered.startswith(prefix) for prefix in secret_prefixes):
+            key = part.split("=", 1)[0]
+            parts.append(key + "=REDACTED")
+        else:
+            parts.append(part)
+    return " ".join(parts)
+
+
 def process_status(name: str) -> Dict[str, Any]:
     result = run_json(["pgrep", "-fa", name])
-    lines = [line for line in result.get("stdout", "").splitlines() if line]
+    lines = [redact_process_line(line) for line in result.get("stdout", "").splitlines() if line]
     return {"running": bool(lines), "matches": lines[:5]}
 
 
