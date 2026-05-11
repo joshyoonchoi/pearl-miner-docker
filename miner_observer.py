@@ -10,6 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
@@ -21,6 +22,7 @@ PEARLD_RPC_URL = os.environ.get("PEARLD_RPC_URL", "http://127.0.0.1:44107")
 PEARLD_RPC_USER = os.environ.get("PEARLD_RPC_USER", "")
 PEARLD_RPC_PASSWORD = os.environ.get("PEARLD_RPC_PASSWORD", "")
 HTTP_TIMEOUT = float(os.environ.get("PEARL_OBSERVER_TIMEOUT", "2.5"))
+LOG_DIR = Path(os.environ.get("PEARL_LOG_DIR", "/app/chain-data/logs"))
 STARTED_AT = time.time()
 
 
@@ -270,6 +272,86 @@ def public_network_status() -> Dict[str, Any]:
     }
 
 
+def read_tail(path: Path, limit_bytes: int = 2_000_000) -> str:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - limit_bytes), os.SEEK_SET)
+            return handle.read().decode("utf-8", "replace")
+    except FileNotFoundError:
+        return ""
+    except Exception as exc:
+        return f"__read_error__ {exc!r}"
+
+
+def log_status() -> Dict[str, Any]:
+    files = {
+        "pearld": LOG_DIR / "pearld.log",
+        "gateway": LOG_DIR / "pearl-gateway.log",
+        "vllm": LOG_DIR / "vllm.log",
+        "worker": LOG_DIR / "pearl-worker.log",
+        "observer": LOG_DIR / "miner-observer.log",
+    }
+    texts = {name: read_tail(path) for name, path in files.items()}
+
+    patterns = {
+        "block_found": "Block found",
+        "creating_proof": "creating proof",
+        "submitting_block": "Submitting block",
+        "block_accepted_by_node": "Block accepted by node",
+        "already_submitted": "already_submitted",
+        "block_rejected": "Block rejected",
+        "error_submitting": "Error submitting",
+        "received_plain_proof": "Received PlainProof",
+        "template_refreshed": "Template refreshed",
+        "request_errors": "Error:",
+        "timeouts": "Timeout",
+    }
+    combined = "\n".join(texts.values())
+    counts = {
+        name: combined.lower().count(pattern.lower())
+        for name, pattern in patterns.items()
+    }
+    recent_needles = (
+        "block found",
+        "proof",
+        "submitting",
+        "accepted",
+        "already_submitted",
+        "rejected",
+        "error submitting",
+        "template",
+        "traceback",
+        "exception",
+    )
+    recent = []
+    for source, text in texts.items():
+        for line in text.splitlines()[-1500:]:
+            lowered = line.lower()
+            if any(needle in lowered for needle in recent_needles):
+                recent.append({"source": source, "line": line[-500:]})
+    stats = {}
+    for name, path in files.items():
+        try:
+            stat = path.stat()
+            stats[name] = {
+                "path": str(path),
+                "bytes": stat.st_size,
+                "mtime": dt.datetime.fromtimestamp(stat.st_mtime, dt.timezone.utc)
+                .replace(microsecond=0)
+                .isoformat(),
+            }
+        except FileNotFoundError:
+            stats[name] = {"path": str(path), "missing": True}
+    return {
+        "dir": str(LOG_DIR),
+        "files": stats,
+        "counts": counts,
+        "recent": recent[-80:],
+    }
+
+
 def status_snapshot() -> Dict[str, Any]:
     return {
         "collected_at": now_iso(),
@@ -294,6 +376,7 @@ def status_snapshot() -> Dict[str, Any]:
         "pearld": pearld_status(),
         "gateway": gateway_status(),
         "vllm": vllm_status(),
+        "logs": log_status(),
         "wallet_stats": wallet_status(),
         "network": public_network_status(),
     }
@@ -392,6 +475,10 @@ pre {
     <h2>Gateway Mining Metrics</h2>
     <pre id="gateway"></pre>
   </section>
+  <section>
+    <h2>Proof / Submission Logs</h2>
+    <pre id="logs"></pre>
+  </section>
 </main>
 <script>
 const fmt = (value) => value === null || value === undefined || value === "" ? " -" : Number(value).toLocaleString(undefined, {maximumFractionDigits: 2});
@@ -404,6 +491,7 @@ async function load() {
   const v = data.vllm || {};
   const w = data.wallet_stats || {};
   const p = data.pearld || {};
+  const logCounts = ((data.logs || {}).counts || {});
   const gpu = ((data.gpu || {}).gpus || [])[0] || {};
   document.getElementById("updated").textContent = `Updated ${data.collected_at}`;
   document.getElementById("cards").innerHTML = [
@@ -413,6 +501,12 @@ async function load() {
     card("KV Cache", v.kv_cache_usage == null ? " -" : `${fmt(v.kv_cache_usage * 100)}%`),
     card("GPU", gpu.util_percent == null ? " -" : `${fmt(gpu.util_percent)}%`, Number(gpu.util_percent || 0) >= 80 ? "good" : "warn"),
     card("Height", raw(p.height), p.template_available ? "good" : "warn"),
+    card("Found", fmt(logCounts.block_found), Number(logCounts.block_found || 0) > 0 ? "good" : ""),
+    card("Proofs", fmt(logCounts.received_plain_proof), Number(logCounts.received_plain_proof || 0) > 0 ? "good" : ""),
+    card("Submits", fmt(logCounts.submitting_block), Number(logCounts.submitting_block || 0) > 0 ? "good" : ""),
+    card("Accepted", fmt(logCounts.block_accepted_by_node), Number(logCounts.block_accepted_by_node || 0) > 0 ? "good" : ""),
+    card("Already", fmt(logCounts.already_submitted), Number(logCounts.already_submitted || 0) > 0 ? "warn" : ""),
+    card("Rejected", fmt(logCounts.block_rejected), Number(logCounts.block_rejected || 0) > 0 ? "bad" : ""),
     card("Paid Blocks", fmt(w.blocks_alltime), Number(w.blocks_alltime || 0) > 0 ? "good" : ""),
     card("Orphans", fmt(w.orphans_alltime), Number(w.orphans_alltime || 0) > 0 ? "warn" : "")
   ].join("");
@@ -420,6 +514,7 @@ async function load() {
     `<tr><td>${name}</td><td class="${okClass(info.running)}">${info.running ? "running" : "down"}</td><td>${(info.matches || []).join("<br>")}</td></tr>`
   ).join("");
   document.getElementById("gateway").textContent = ((data.gateway || {}).interesting_lines || []).join("\\n") || raw((data.gateway || {}).metrics_error);
+  document.getElementById("logs").textContent = (((data.logs || {}).recent || []).map((item) => `[${item.source}] ${item.line}`).join("\\n")) || "No proof/submission log lines yet.";
 }
 load().catch((err) => { document.getElementById("updated").textContent = String(err); });
 setInterval(load, 10000);

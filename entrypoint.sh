@@ -34,22 +34,30 @@ echo "📦 Starting Pearl node (pearld)..."
 
 # Create chain data directory
 mkdir -p /app/chain-data
+LOG_DIR="${PEARL_LOG_DIR:-/app/chain-data/logs}"
+mkdir -p "$LOG_DIR"
+
+start_logged() {
+    local log_name="$1"
+    local pid_var="$2"
+    shift 2
+    "$@" > >(tee -a "$LOG_DIR/${log_name}.log") 2>&1 &
+    printf -v "$pid_var" '%s' "$!"
+}
 
 # Generate random RPC credentials for internal use
 RPC_USER="miner_$(cat /proc/sys/kernel/random/uuid | tr -d '-' | head -c 16)"
 RPC_PASS="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
 
 # Start pearld
-pearld \
+start_logged pearld PEARLD_PID pearld \
     --datadir=/app/chain-data \
     --rpcuser="$RPC_USER" \
     --rpcpass="$RPC_PASS" \
     --miningaddr="$PEARL_WALLET_ADDRESS" \
     --listen=:44108 \
     --rpclisten=:44107 \
-    --notls \
-    &
-PEARLD_PID=$!
+    --notls
 
 # Wait for node RPC to be ready
 echo "⏳ Waiting for Pearl node to start..."
@@ -128,8 +136,7 @@ export PEARLD_RPC_USER="$RPC_USER"
 export PEARLD_RPC_PASSWORD="$RPC_PASS"
 export PEARLD_MINING_ADDRESS="$PEARL_WALLET_ADDRESS"
 
-pearl-gateway start &
-GATEWAY_PID=$!
+start_logged pearl-gateway GATEWAY_PID pearl-gateway start
 
 # Wait for gateway metrics endpoint
 echo "⏳ Waiting for gateway to be ready..."
@@ -148,8 +155,7 @@ done
 # Step 2b: Start read-only local observer
 # ============================================================
 echo "📡 Starting Pearl Observer..."
-python3 /app/miner_observer.py &
-OBSERVER_PID=$!
+start_logged miner-observer OBSERVER_PID python3 /app/miner_observer.py
 
 # ============================================================
 # Step 3: Auto-detect GPUs and configure parallelism
@@ -206,7 +212,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # Start vLLM in background (not exec — we need to start the worker loop too)
-vllm serve pearl-ai/Llama-3.3-70B-Instruct-pearl \
+start_logged vllm VLLM_PID vllm serve pearl-ai/Llama-3.3-70B-Instruct-pearl \
     --host 0.0.0.0 \
     --port 8000 \
     --max-model-len "$PEARL_MAX_MODEL_LEN" \
@@ -214,9 +220,7 @@ vllm serve pearl-ai/Llama-3.3-70B-Instruct-pearl \
     --enforce-eager \
     --data-parallel-size "$DP_SIZE" \
     --no-enable-prefix-caching \
-    --max-num-seqs "${PEARL_MAX_SEQS:-64}" \
-    &
-VLLM_PID=$!
+    --max-num-seqs "${PEARL_MAX_SEQS:-64}"
 
 # ============================================================
 # Step 4: Wait for vLLM to be ready, then start request worker
@@ -247,8 +251,7 @@ if [ -z "$PEARL_WORKERS" ]; then
 fi
 export PEARL_WORKERS
 echo "⛏️  Starting mining request worker ($PEARL_WORKERS threads for $GPU_COUNT GPU(s))..."
-python3 /app/pearl_worker.py &
-WORKER_PID=$!
+start_logged pearl-worker WORKER_PID python3 /app/pearl_worker.py
 
 # ============================================================
 # Step 5: Watchdog — restart ALL components if they die
@@ -263,22 +266,19 @@ while true; do
     # Check gateway (CRITICAL — without it, mining proofs go nowhere)
     if ! kill -0 $GATEWAY_PID 2>/dev/null; then
         echo "⚠️  Gateway died! Restarting..."
-        pearl-gateway start &
-        GATEWAY_PID=$!
+        start_logged pearl-gateway GATEWAY_PID pearl-gateway start
         sleep 5
         echo "✅ Gateway restarted (PID=$GATEWAY_PID)"
     fi
     # Check worker
     if ! kill -0 $WORKER_PID 2>/dev/null; then
         echo "⚠️  Worker died, restarting..."
-        python3 /app/pearl_worker.py &
-        WORKER_PID=$!
+        start_logged pearl-worker WORKER_PID python3 /app/pearl_worker.py
     fi
     # Check observer (read-only; useful for fleet health/debugging)
     if ! kill -0 $OBSERVER_PID 2>/dev/null; then
         echo "⚠️  Observer died, restarting..."
-        python3 /app/miner_observer.py &
-        OBSERVER_PID=$!
+        start_logged miner-observer OBSERVER_PID python3 /app/miner_observer.py
     fi
     sleep 30
 done
