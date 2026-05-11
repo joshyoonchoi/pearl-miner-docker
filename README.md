@@ -48,6 +48,9 @@ docker run --rm --gpus all \
 | `PEARL_GPU_UTIL` | ❌ | GPU memory utilization (default: 0.9) |
 | `PEARL_DP_SIZE` | ❌ | Data parallel size (default: auto-detected GPU count) |
 | `PEARL_WORKERS` | ❌ | Number of request worker threads (default: 32) |
+| `PEARL_NETWORK` | ❌ | Pearl network: `mainnet`, `testnet`, `testnet2`, `simnet`, or `regtest` (default: `mainnet`) |
+| `PEARLD_RPC_PORT` | ❌ | Internal Pearl RPC port (default: `44107`) |
+| `PEARLD_LISTEN_PORT` | ❌ | Pearl p2p listen port (defaults to the selected network's standard port) |
 | `PEARLD_CONNECT` | ❌ | Peer address to speed up initial sync |
 | `PEARL_OBSERVER_PORT` | ❌ | Read-only local dashboard/API port (default: 8340) |
 

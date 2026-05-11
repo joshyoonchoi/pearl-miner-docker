@@ -10,6 +10,7 @@ echo "🐚 Pearl Miner starting up..."
 echo "   Wallet: ${PEARL_WALLET_ADDRESS:-NOT SET}"
 echo "   GPU Memory Utilization: ${PEARL_GPU_UTIL:-0.9}"
 echo "   Max Model Length: ${PEARL_MAX_MODEL_LEN:-8192}"
+echo "   Network: ${PEARL_NETWORK:-mainnet}"
 
 # Validate required env vars
 if [ -z "$PEARL_WALLET_ADDRESS" ]; then
@@ -23,6 +24,39 @@ if [ -z "$HF_TOKEN" ]; then
     echo "   Get one at https://huggingface.co/settings/tokens"
     exit 1
 fi
+
+PEARL_NETWORK="${PEARL_NETWORK:-mainnet}"
+case "$PEARL_NETWORK" in
+    mainnet)
+        PEARLD_NETWORK_ARGS=()
+        DEFAULT_PEER_PORT=44108
+        ;;
+    testnet)
+        PEARLD_NETWORK_ARGS=(--testnet)
+        DEFAULT_PEER_PORT=44110
+        ;;
+    testnet2)
+        PEARLD_NETWORK_ARGS=(--testnet2)
+        DEFAULT_PEER_PORT=44112
+        ;;
+    simnet)
+        PEARLD_NETWORK_ARGS=(--simnet)
+        DEFAULT_PEER_PORT=18555
+        ;;
+    regtest)
+        PEARLD_NETWORK_ARGS=(--regtest)
+        DEFAULT_PEER_PORT=18444
+        ;;
+    *)
+        echo "❌ ERROR: PEARL_NETWORK must be one of mainnet, testnet, testnet2, simnet, regtest"
+        exit 1
+        ;;
+esac
+
+PEARLD_RPC_PORT="${PEARLD_RPC_PORT:-44107}"
+PEARLD_LISTEN_PORT="${PEARLD_LISTEN_PORT:-$DEFAULT_PEER_PORT}"
+echo "   Pearl RPC: 127.0.0.1:${PEARLD_RPC_PORT}"
+echo "   Pearl P2P: :${PEARLD_LISTEN_PORT}"
 
 # Export HF token for model download
 export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
@@ -74,7 +108,7 @@ start_sshd() {
 RPC_USER="miner_$(cat /proc/sys/kernel/random/uuid | tr -d '-' | head -c 16)"
 RPC_PASS="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
 
-export PEARLD_RPC_URL="http://localhost:44107"
+export PEARLD_RPC_URL="http://localhost:${PEARLD_RPC_PORT}"
 export PEARLD_RPC_USER="$RPC_USER"
 export PEARLD_RPC_PASSWORD="$RPC_PASS"
 export PEARLD_MINING_ADDRESS="$PEARL_WALLET_ADDRESS"
@@ -83,12 +117,13 @@ start_sshd
 
 # Start pearld
 start_logged pearld PEARLD_PID pearld \
+    "${PEARLD_NETWORK_ARGS[@]}" \
     --datadir=/app/chain-data \
     --rpcuser="$RPC_USER" \
     --rpcpass="$RPC_PASS" \
     --miningaddr="$PEARL_WALLET_ADDRESS" \
-    --listen=:44108 \
-    --rpclisten=:44107 \
+    --listen=":${PEARLD_LISTEN_PORT}" \
+    --rpclisten=":${PEARLD_RPC_PORT}" \
     --notls
 
 # Wait for node RPC to be ready
@@ -97,7 +132,7 @@ for i in $(seq 1 60); do
     if curl -s --user "$RPC_USER:$RPC_PASS" \
         --data-binary '{"jsonrpc":"1.0","id":"startup","method":"getinfo","params":[]}' \
         -H 'content-type: text/plain;' \
-        http://localhost:44107/ > /dev/null 2>&1; then
+        "$PEARLD_RPC_URL/" > /dev/null 2>&1; then
         echo "✅ Pearl node is running"
         break
     fi
@@ -112,7 +147,7 @@ done
 BLOCK_COUNT=$(curl -s --user "$RPC_USER:$RPC_PASS" \
     --data-binary '{"jsonrpc":"1.0","id":"sync","method":"getblockcount","params":[]}' \
     -H 'content-type: text/plain;' \
-    http://localhost:44107/ | jq -r '.result // "unknown"')
+    "$PEARLD_RPC_URL/" | jq -r '.result // "unknown"')
 echo "📊 Current block height: $BLOCK_COUNT"
 
 # Start the read-only observer before the long sync/template waits so fresh
@@ -134,7 +169,7 @@ while [ $SYNC_ELAPSED -lt $SYNC_TIMEOUT ]; do
     SYNC_CHECK=$(curl -s --user "$RPC_USER:$RPC_PASS" \
         --data-binary '{"jsonrpc":"1.0","id":"sync","method":"getblocktemplate","params":[]}' \
         -H 'content-type: text/plain;' \
-        http://localhost:44107/ 2>/dev/null)
+        "$PEARLD_RPC_URL/" 2>/dev/null)
     
     # If we get error code -10 ("downloading blocks"), keep waiting
     ERROR_CODE=$(echo "$SYNC_CHECK" | jq -r '.error.code // 0')
@@ -142,7 +177,7 @@ while [ $SYNC_ELAPSED -lt $SYNC_TIMEOUT ]; do
         CURRENT_HEIGHT=$(curl -s --user "$RPC_USER:$RPC_PASS" \
             --data-binary '{"jsonrpc":"1.0","id":"h","method":"getblockcount","params":[]}' \
             -H 'content-type: text/plain;' \
-            http://localhost:44107/ | jq -r '.result // "?"')
+            "$PEARLD_RPC_URL/" | jq -r '.result // "?"')
         echo "✅ Chain fully synced at height $CURRENT_HEIGHT!"
         break
     fi
@@ -151,7 +186,7 @@ while [ $SYNC_ELAPSED -lt $SYNC_TIMEOUT ]; do
         CURRENT_HEIGHT=$(curl -s --user "$RPC_USER:$RPC_PASS" \
             --data-binary '{"jsonrpc":"1.0","id":"h","method":"getblockcount","params":[]}' \
             -H 'content-type: text/plain;' \
-            http://localhost:44107/ | jq -r '.result // "?"')
+            "$PEARLD_RPC_URL/" | jq -r '.result // "?"')
         echo "   Syncing... height=$CURRENT_HEIGHT (${SYNC_ELAPSED}s elapsed)"
     fi
     sleep 5

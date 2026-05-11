@@ -645,6 +645,9 @@ def status_snapshot() -> Dict[str, Any]:
         "observer_uptime_seconds": round(time.time() - STARTED_AT, 1),
         "wallet": WALLET,
         "config": {
+            "network": os.environ.get("PEARL_NETWORK", "mainnet"),
+            "pearld_rpc_port": os.environ.get("PEARLD_RPC_PORT", "44107"),
+            "pearld_listen_port": os.environ.get("PEARLD_LISTEN_PORT"),
             "workers": os.environ.get("PEARL_WORKERS"),
             "max_tokens": os.environ.get("PEARL_MAX_TOKENS", "1"),
             "word_list": os.environ.get("PEARL_WORD_LIST"),
