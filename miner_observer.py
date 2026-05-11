@@ -24,6 +24,30 @@ PEARLD_RPC_PASSWORD = os.environ.get("PEARLD_RPC_PASSWORD", "")
 HTTP_TIMEOUT = float(os.environ.get("PEARL_OBSERVER_TIMEOUT", "2.5"))
 LOG_DIR = Path(os.environ.get("PEARL_LOG_DIR", "/app/chain-data/logs"))
 STARTED_AT = time.time()
+LOG_FILES = {
+    "pearld": "pearld.log",
+    "gateway": "pearl-gateway.log",
+    "vllm": "vllm.log",
+    "worker": "pearl-worker.log",
+    "observer": "miner-observer.log",
+}
+AUDIT_PATTERNS = {
+    "block_found": "Block found",
+    "creating_proof": "creating proof",
+    "received_plain_proof": "Received PlainProof",
+    "submitting_block": "Submitting block",
+    "block_accepted_by_node": "Block accepted by node",
+    "already_submitted": "already_submitted",
+    "block_rejected": "Block rejected",
+    "error_submitting": "Error submitting",
+    "request_errors": "Error:",
+    "timeouts": "Timeout",
+    "template_refreshed": "Template refreshed",
+    "pearl_kernel_mining_layers": "Using PearlKernel (mining_enabled=True)",
+    "pearl_kernel_non_mining_layers": "Using PearlKernel (mining_enabled=False)",
+    "mining_state_initialized_typo": "Mining state initalized",
+    "mining_state_initialized": "Mining state initialized",
+}
 
 
 def now_iso() -> str:
@@ -365,32 +389,13 @@ def mining_diagnostics(texts: Dict[str, str]) -> Dict[str, Any]:
 
 
 def log_status() -> Dict[str, Any]:
-    files = {
-        "pearld": LOG_DIR / "pearld.log",
-        "gateway": LOG_DIR / "pearl-gateway.log",
-        "vllm": LOG_DIR / "vllm.log",
-        "worker": LOG_DIR / "pearl-worker.log",
-        "observer": LOG_DIR / "miner-observer.log",
-    }
+    files = {name: LOG_DIR / filename for name, filename in LOG_FILES.items()}
     texts = {name: read_tail(path) for name, path in files.items()}
 
-    patterns = {
-        "block_found": "Block found",
-        "creating_proof": "creating proof",
-        "submitting_block": "Submitting block",
-        "block_accepted_by_node": "Block accepted by node",
-        "already_submitted": "already_submitted",
-        "block_rejected": "Block rejected",
-        "error_submitting": "Error submitting",
-        "received_plain_proof": "Received PlainProof",
-        "template_refreshed": "Template refreshed",
-        "request_errors": "Error:",
-        "timeouts": "Timeout",
-    }
     combined = "\n".join(texts.values())
     counts = {
         name: combined.lower().count(pattern.lower())
-        for name, pattern in patterns.items()
+        for name, pattern in AUDIT_PATTERNS.items()
     }
     recent_needles = (
         "block found",
@@ -429,6 +434,101 @@ def log_status() -> Dict[str, Any]:
         "counts": counts,
         "mining_diagnostics": mining_diagnostics(texts),
         "recent": recent[-80:],
+    }
+
+
+def _line_has_any_event(line: str) -> bool:
+    lowered = line.lower()
+    return any(pattern.lower() in lowered for pattern in AUDIT_PATTERNS.values())
+
+
+def full_log_audit() -> Dict[str, Any]:
+    started = time.time()
+    totals = {name: 0 for name in AUDIT_PATTERNS}
+    files: Dict[str, Any] = {}
+    first_events: List[Dict[str, Any]] = []
+    last_events: List[Dict[str, Any]] = []
+
+    for source, filename in LOG_FILES.items():
+        path = LOG_DIR / filename
+        file_counts = {name: 0 for name in AUDIT_PATTERNS}
+        line_count = 0
+        file_first: List[Dict[str, Any]] = []
+        file_last: List[Dict[str, Any]] = []
+        error = None
+        stat_payload: Dict[str, Any] = {"path": str(path)}
+
+        try:
+            stat = path.stat()
+            stat_payload.update(
+                {
+                    "bytes": stat.st_size,
+                    "mtime": dt.datetime.fromtimestamp(stat.st_mtime, dt.timezone.utc)
+                    .replace(microsecond=0)
+                    .isoformat(),
+                }
+            )
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                for line_number, line in enumerate(handle, 1):
+                    line_count = line_number
+                    lowered = line.lower()
+                    matched = []
+                    for name, pattern in AUDIT_PATTERNS.items():
+                        count = lowered.count(pattern.lower())
+                        if count:
+                            file_counts[name] += count
+                            totals[name] += count
+                            matched.append(name)
+                    if matched and _line_has_any_event(line):
+                        event = {
+                            "source": source,
+                            "line_number": line_number,
+                            "matched": matched,
+                            "line": line.rstrip("\n")[-700:],
+                        }
+                        if len(file_first) < 10:
+                            file_first.append(event)
+                        file_last.append(event)
+                        file_last = file_last[-10:]
+        except FileNotFoundError:
+            stat_payload["missing"] = True
+        except Exception as exc:
+            error = repr(exc)
+
+        files[source] = {
+            **stat_payload,
+            "line_count": line_count,
+            "counts": file_counts,
+            "error": error,
+            "first_events": file_first,
+            "last_events": file_last,
+        }
+        first_events.extend(file_first)
+        last_events.extend(file_last)
+        last_events = last_events[-40:]
+
+    proof_totals = {
+        name: totals.get(name, 0)
+        for name in (
+            "block_found",
+            "creating_proof",
+            "received_plain_proof",
+            "submitting_block",
+            "block_accepted_by_node",
+            "already_submitted",
+            "block_rejected",
+            "error_submitting",
+        )
+    }
+    return {
+        "collected_at": now_iso(),
+        "duration_seconds": round(time.time() - started, 3),
+        "log_dir": str(LOG_DIR),
+        "totals": totals,
+        "proof_totals": proof_totals,
+        "files": files,
+        "first_events": first_events[:40],
+        "last_events": last_events,
     }
 
 
@@ -614,6 +714,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/status":
             self.write(200, json.dumps(status_snapshot(), sort_keys=True), "application/json")
+            return
+        if self.path == "/api/log-audit":
+            self.write(200, json.dumps(full_log_audit(), sort_keys=True), "application/json")
             return
         self.write(404, "not found\n", "text/plain")
 
