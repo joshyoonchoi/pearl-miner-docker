@@ -48,6 +48,18 @@ AUDIT_PATTERNS = {
     "mining_state_initialized_typo": "Mining state initalized",
     "mining_state_initialized": "Mining state initialized",
 }
+LOG_EVENT_NAMES = (
+    "block_found",
+    "creating_proof",
+    "received_plain_proof",
+    "submitting_block",
+    "block_accepted_by_node",
+    "already_submitted",
+    "block_rejected",
+    "error_submitting",
+)
+DEFAULT_LOG_EVENTS_LIMIT = 500
+MAX_LOG_EVENTS_LIMIT = 5000
 
 
 def now_iso() -> str:
@@ -532,6 +544,88 @@ def full_log_audit() -> Dict[str, Any]:
     }
 
 
+def parse_limit(query: Dict[str, List[str]], default: int, maximum: int) -> int:
+    values = query.get("limit") or []
+    if not values:
+        return default
+    try:
+        limit = int(values[0])
+    except Exception:
+        return default
+    return max(1, min(limit, maximum))
+
+
+def log_events(limit: int = DEFAULT_LOG_EVENTS_LIMIT, include_all: bool = False) -> Dict[str, Any]:
+    started = time.time()
+    event_names = tuple(AUDIT_PATTERNS) if include_all else LOG_EVENT_NAMES
+    totals = {name: 0 for name in event_names}
+    files: Dict[str, Any] = {}
+    events: List[Dict[str, Any]] = []
+
+    for source, filename in LOG_FILES.items():
+        path = LOG_DIR / filename
+        file_counts = {name: 0 for name in event_names}
+        line_count = 0
+        error = None
+        stat_payload: Dict[str, Any] = {"path": str(path)}
+
+        try:
+            stat = path.stat()
+            stat_payload.update(
+                {
+                    "bytes": stat.st_size,
+                    "mtime": dt.datetime.fromtimestamp(stat.st_mtime, dt.timezone.utc)
+                    .replace(microsecond=0)
+                    .isoformat(),
+                }
+            )
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                for line_number, line in enumerate(handle, 1):
+                    line_count = line_number
+                    lowered = line.lower()
+                    matched = []
+                    for name in event_names:
+                        pattern = AUDIT_PATTERNS[name]
+                        count = lowered.count(pattern.lower())
+                        if count:
+                            file_counts[name] += count
+                            totals[name] += count
+                            matched.append(name)
+                    if matched:
+                        events.append(
+                            {
+                                "source": source,
+                                "line_number": line_number,
+                                "matched": matched,
+                                "line": line.rstrip("\n")[-1200:],
+                            }
+                        )
+                        events = events[-limit:]
+        except FileNotFoundError:
+            stat_payload["missing"] = True
+        except Exception as exc:
+            error = repr(exc)
+
+        files[source] = {
+            **stat_payload,
+            "line_count": line_count,
+            "counts": file_counts,
+            "error": error,
+        }
+
+    return {
+        "collected_at": now_iso(),
+        "duration_seconds": round(time.time() - started, 3),
+        "log_dir": str(LOG_DIR),
+        "limit": limit,
+        "include_all": include_all,
+        "event_names": list(event_names),
+        "totals": totals,
+        "files": files,
+        "events": events,
+    }
+
+
 def status_snapshot() -> Dict[str, Any]:
     return {
         "collected_at": now_iso(),
@@ -717,6 +811,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/log-audit":
             self.write(200, json.dumps(full_log_audit(), sort_keys=True), "application/json")
+            return
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/log-events":
+            query = urllib.parse.parse_qs(parsed.query)
+            include_all = (query.get("include_all") or ["0"])[0] in ("1", "true", "yes")
+            limit = parse_limit(query, DEFAULT_LOG_EVENTS_LIMIT, MAX_LOG_EVENTS_LIMIT)
+            self.write(
+                200,
+                json.dumps(log_events(limit=limit, include_all=include_all), sort_keys=True),
+                "application/json",
+            )
             return
         self.write(404, "not found\n", "text/plain")
 
