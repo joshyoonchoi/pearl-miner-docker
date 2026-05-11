@@ -151,6 +151,26 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
+# The vLLM miner plugin asks the gateway for work during engine startup. The
+# node can briefly report synced before the gateway has accepted a usable block
+# template, especially from a fresh volume. Starting vLLM in that window crashes
+# the engine with "mining_paused: no block template available".
+echo "⏳ Waiting for Pearl Gateway block template..."
+for i in $(seq 1 600); do
+    if grep -q "Template refreshed successfully" "$LOG_DIR/pearl-gateway.log" 2>/dev/null; then
+        echo "✅ Pearl Gateway has a block template"
+        break
+    fi
+    if [ $i -eq 600 ]; then
+        echo "❌ Pearl Gateway did not refresh a block template after 10 minutes"
+        exit 1
+    fi
+    if [ $((i % 30)) -eq 0 ]; then
+        echo "   Still waiting for gateway template... (${i}s elapsed)"
+    fi
+    sleep 1
+done
+
 # ============================================================
 # Step 2b: Start read-only local observer
 # ============================================================
