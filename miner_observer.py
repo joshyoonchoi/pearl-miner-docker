@@ -126,6 +126,32 @@ def process_status(name: str) -> Dict[str, Any]:
     return {"running": bool(lines), "matches": lines[:5]}
 
 
+def process_env(name: str) -> Dict[str, Any]:
+    result = run_json(["pgrep", "-f", name])
+    pids = [pid for pid in result.get("stdout", "").splitlines() if pid.strip().isdigit()]
+    if not pids:
+        return {"pid": None, "env": {}, "error": result.get("stderr") or result.get("error")}
+    pid = pids[0].strip()
+    path = Path("/proc") / pid / "environ"
+    try:
+        raw = path.read_bytes().decode("utf-8", "replace")
+    except Exception as exc:
+        return {"pid": pid, "env": {}, "error": repr(exc)}
+    safe_prefixes = ("MINER_", "PEARL_", "VLLM_", "CUDA_")
+    secret_fragments = ("TOKEN", "PASSWORD", "PASS", "KEY", "SECRET")
+    env: Dict[str, str] = {}
+    for item in raw.split("\0"):
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        if not key.startswith(safe_prefixes):
+            continue
+        if any(fragment in key for fragment in secret_fragments):
+            value = "SET" if value else ""
+        env[key] = value
+    return {"pid": pid, "env": dict(sorted(env.items())), "error": None}
+
+
 def gpu_status() -> Dict[str, Any]:
     result = run_json(
         [
@@ -285,6 +311,59 @@ def read_tail(path: Path, limit_bytes: int = 2_000_000) -> str:
         return f"__read_error__ {exc!r}"
 
 
+def recent_matching_lines(texts: Dict[str, str], needles: List[str], limit: int = 80) -> List[Dict[str, str]]:
+    recent = []
+    lowered_needles = [needle.lower() for needle in needles]
+    for source, text in texts.items():
+        for line in text.splitlines()[-2500:]:
+            lowered = line.lower()
+            if any(needle in lowered for needle in lowered_needles):
+                recent.append({"source": source, "line": line[-700:]})
+    return recent[-limit:]
+
+
+def mining_diagnostics(texts: Dict[str, str]) -> Dict[str, Any]:
+    combined = "\n".join(texts.values())
+    lowered = combined.lower()
+    vllm_text = texts.get("vllm", "")
+    worker_text = texts.get("worker", "")
+    return {
+        "counts": {
+            "pearl_kernel_mining_layers": lowered.count(
+                "using pearlkernel (mining_enabled=true)"
+            ),
+            "pearl_kernel_non_mining_layers": lowered.count(
+                "using pearlkernel (mining_enabled=false)"
+            ),
+            "mining_state_initialized": lowered.count("mining state initalized")
+            + lowered.count("mining state initialized"),
+            "noisy_gemm_mentions": lowered.count("noisygemm")
+            + lowered.count("noisy gemm")
+            + lowered.count("noisy_gemm"),
+            "chunked_prefill_mentions": lowered.count("chunked prefill")
+            + lowered.count("chunked_prefill"),
+        },
+        "vllm_env": process_env("vllm serve"),
+        "worker_env": process_env("pearl_worker.py"),
+        "vllm_recent": recent_matching_lines(
+            {"vllm": vllm_text},
+            [
+                "Using PearlKernel",
+                "mining_enabled",
+                "Mining state",
+                "NoisyGEMM",
+                "noisy gemm",
+                "chunked prefill",
+                "chunked_prefill",
+            ],
+            limit=40,
+        ),
+        "worker_recent_stats": [
+            line[-500:] for line in worker_text.splitlines() if "[Stats]" in line
+        ][-8:],
+    }
+
+
 def log_status() -> Dict[str, Any]:
     files = {
         "pearld": LOG_DIR / "pearld.log",
@@ -348,6 +427,7 @@ def log_status() -> Dict[str, Any]:
         "dir": str(LOG_DIR),
         "files": stats,
         "counts": counts,
+        "mining_diagnostics": mining_diagnostics(texts),
         "recent": recent[-80:],
     }
 

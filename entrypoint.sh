@@ -212,15 +212,26 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # Start vLLM in background (not exec — we need to start the worker loop too)
-start_logged vllm VLLM_PID vllm serve pearl-ai/Llama-3.3-70B-Instruct-pearl \
-    --host 0.0.0.0 \
-    --port 8000 \
-    --max-model-len "$PEARL_MAX_MODEL_LEN" \
-    --gpu-memory-utilization "${PEARL_GPU_UTIL:-0.9}" \
-    --enforce-eager \
-    --data-parallel-size "$DP_SIZE" \
-    --no-enable-prefix-caching \
+VLLM_ARGS=(
+    pearl-ai/Llama-3.3-70B-Instruct-pearl
+    --host 0.0.0.0
+    --port 8000
+    --max-model-len "$PEARL_MAX_MODEL_LEN"
+    --gpu-memory-utilization "${PEARL_GPU_UTIL:-0.9}"
+    --enforce-eager
+    --data-parallel-size "$DP_SIZE"
+    --no-enable-prefix-caching
     --max-num-seqs "${PEARL_MAX_SEQS:-64}"
+)
+
+if [ "${PEARL_DISABLE_CHUNKED_PREFILL:-0}" = "1" ]; then
+    echo "   Chunked prefill: disabled"
+    VLLM_ARGS+=(--no-enable-chunked-prefill)
+else
+    echo "   Chunked prefill: vLLM default"
+fi
+
+start_logged vllm VLLM_PID vllm serve "${VLLM_ARGS[@]}"
 
 # ============================================================
 # Step 4: Wait for vLLM to be ready, then start request worker
