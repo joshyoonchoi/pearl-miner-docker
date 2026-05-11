@@ -54,9 +54,32 @@ log_line_count() {
     fi
 }
 
+start_sshd() {
+    echo "🔐 Starting SSH service..."
+    if command -v service >/dev/null 2>&1 && service ssh start >/dev/null 2>&1; then
+        echo "✅ SSH service is running"
+    elif [ -x /usr/sbin/sshd ]; then
+        mkdir -p /run/sshd
+        if /usr/sbin/sshd; then
+            echo "✅ SSH daemon is running"
+        else
+            echo "⚠️  SSH daemon failed to start; continuing without SSH"
+        fi
+    else
+        echo "⚠️  SSH server not found; continuing without SSH"
+    fi
+}
+
 # Generate random RPC credentials for internal use
 RPC_USER="miner_$(cat /proc/sys/kernel/random/uuid | tr -d '-' | head -c 16)"
 RPC_PASS="$(cat /proc/sys/kernel/random/uuid | tr -d '-')"
+
+export PEARLD_RPC_URL="http://localhost:44107"
+export PEARLD_RPC_USER="$RPC_USER"
+export PEARLD_RPC_PASSWORD="$RPC_PASS"
+export PEARLD_MINING_ADDRESS="$PEARL_WALLET_ADDRESS"
+
+start_sshd
 
 # Start pearld
 start_logged pearld PEARLD_PID pearld \
@@ -91,6 +114,11 @@ BLOCK_COUNT=$(curl -s --user "$RPC_USER:$RPC_PASS" \
     -H 'content-type: text/plain;' \
     http://localhost:44107/ | jq -r '.result // "unknown"')
 echo "📊 Current block height: $BLOCK_COUNT"
+
+# Start the read-only observer before the long sync/template waits so fresh
+# pods remain externally inspectable while they catch up.
+echo "📡 Starting Pearl Observer..."
+start_logged miner-observer OBSERVER_PID python3 /app/miner_observer.py
 
 # ============================================================
 # Step 1b: Wait for chain to fully sync before proceeding
@@ -140,11 +168,6 @@ fi
 # ============================================================
 echo "⛏️  Starting Pearl Gateway..."
 
-export PEARLD_RPC_URL="http://localhost:44107"
-export PEARLD_RPC_USER="$RPC_USER"
-export PEARLD_RPC_PASSWORD="$RPC_PASS"
-export PEARLD_MINING_ADDRESS="$PEARL_WALLET_ADDRESS"
-
 GATEWAY_LOG_PATH="$LOG_DIR/pearl-gateway.log"
 GATEWAY_TEMPLATE_LOG_START=$(log_line_count "$GATEWAY_LOG_PATH")
 start_logged pearl-gateway GATEWAY_PID pearl-gateway start
@@ -187,12 +210,6 @@ for i in $(seq 1 600); do
     fi
     sleep 1
 done
-
-# ============================================================
-# Step 2b: Start read-only local observer
-# ============================================================
-echo "📡 Starting Pearl Observer..."
-start_logged miner-observer OBSERVER_PID python3 /app/miner_observer.py
 
 # ============================================================
 # Step 3: Auto-detect GPUs and configure parallelism
